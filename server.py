@@ -14,7 +14,11 @@ from wsgiref.simple_server import make_server
 
 import picamera
 from ws4py.websocket import WebSocket
-from ws4py.server.wsgirefserver import WSGIServer, WebSocketWSGIRequestHandler
+from ws4py.server.wsgirefserver import (
+    WSGIServer,
+    WebSocketWSGIHandler,
+    WebSocketWSGIRequestHandler,
+)
 from ws4py.server.wsgiutils import WebSocketWSGIApplication
 
 ###########################################
@@ -28,6 +32,9 @@ COLOR = u'#444'
 BGCOLOR = u'#333'
 JSMPEG_MAGIC = b'jsmp'
 JSMPEG_HEADER = Struct('>4sHH')
+VFLIP = False
+HFLIP = False
+
 ###########################################
 
 
@@ -48,8 +55,8 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
             content_type = 'text/html; charset=utf-8'
             tpl = Template(self.server.index_template)
             content = tpl.safe_substitute(dict(
-                ADDRESS='%s:%d' % (self.request.getsockname()[0], WS_PORT),
-                WIDTH=WIDTH, HEIGHT=HEIGHT, COLOR=COLOR, BGCOLOR=BGCOLOR))
+                WS_PORT=WS_PORT, WIDTH=WIDTH, HEIGHT=HEIGHT, COLOR=COLOR,
+                BGCOLOR=BGCOLOR))
         else:
             self.send_error(404, 'File not found')
             return
@@ -82,7 +89,7 @@ class BroadcastOutput(object):
     def __init__(self, camera):
         print('Spawning background conversion process')
         self.converter = Popen([
-            'avconv',
+            'ffmpeg',
             '-f', 'rawvideo',
             '-pix_fmt', 'yuv420p',
             '-s', '%dx%d' % camera.resolution,
@@ -113,7 +120,7 @@ class BroadcastThread(Thread):
     def run(self):
         try:
             while True:
-                buf = self.converter.stdout.read(512)
+                buf = self.converter.stdout.read1(32768)
                 if buf:
                     self.websocket_server.manager.broadcast(buf, binary=True)
                 elif self.converter.poll() is not None:
@@ -127,8 +134,11 @@ def main():
     with picamera.PiCamera() as camera:
         camera.resolution = (WIDTH, HEIGHT)
         camera.framerate = FRAMERATE
+        camera.vflip = VFLIP # flips image rightside up, as needed
+        camera.hflip = HFLIP # flips image left-right, as needed
         sleep(1) # camera warm-up time
         print('Initializing websockets server on port %d' % WS_PORT)
+        WebSocketWSGIHandler.http_version = '1.1'
         websocket_server = make_server(
             '', WS_PORT,
             server_class=WSGIServer,
